@@ -37,9 +37,10 @@
 #include <time.h>
 #include "secrets.h"
 #include "DHT.h"
-#define TIME_ZONE -5
- 
-#define DHTPIN 4        // Digital pin connected to the DHT sensor
+#include "EasyBuzzer.h"
+
+#define DHTPIN 4        // (D2) Pin digital conectado al sensor DHT
+#define BUZZPIN 5       // (D1) Pin digital conectado al buzzer
 #define DHTTYPE DHT11   // DHT 11
 #define LDRPIN A0
 
@@ -64,12 +65,13 @@ BearSSL::PrivateKey key(privkey);
 PubSubClient client(net);
  
 time_t now;
-time_t nowish = 1510592825;
+time_t nowish = 1672531200; // 01/01/2023 00:00:00 (fecha base)
  
  
 void NTPConnect(void)
 {
-  Serial.print("Setting time using SNTP");
+  Serial.print("Configurando fecha/hora mediante SNTP");
+  //configTime(int timezone_sec, int daylightOffset_sec, const char* server1, const char* server2);
   configTime(TIME_ZONE * 3600, 0 * 3600, "pool.ntp.org", "time.nist.gov");
   now = time(nullptr);
   while (now < nowish)
@@ -78,17 +80,18 @@ void NTPConnect(void)
     Serial.print(".");
     now = time(nullptr);
   }
-  Serial.println("done!");
+  Serial.println("\nConfigurado!");
   struct tm timeinfo;
   gmtime_r(&now, &timeinfo);
-  Serial.print("Current time: ");
-  Serial.print(asctime(&timeinfo));
+  Serial.print("Fecha y hora actual: ");
+  Serial.println(asctime(&timeinfo));
 }
  
  
 void messageReceived(char *topic, byte *payload, unsigned int length)
 {
-  Serial.print("Received [");
+  EasyBuzzer.beep(1000, 3);
+  Serial.print("Mensaje recibido [");
   Serial.print(topic);
   Serial.print("]: ");
   for (int i = 0; i < length; i++)
@@ -105,14 +108,14 @@ void connectAWS()
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
  
-  Serial.println(String("\nAttempting to connect to SSID: ") + String(WIFI_SSID));
+  Serial.println(String("\nIntentando conectar a la red: ") + String(WIFI_SSID));
  
   while (WiFi.status() != WL_CONNECTED)
   {
     Serial.print(".");
     delay(1000);
   }
-  Serial.println(String("\nConnected to SSID: ") + String(WIFI_SSID));
+  Serial.println(String("\nConectado a la red: ") + String(WIFI_SSID));
 
   NTPConnect();
  
@@ -123,7 +126,7 @@ void connectAWS()
   client.setCallback(messageReceived);
  
  
-  Serial.println("Connecting to AWS IOT");
+  Serial.println("\nConectando a AWS IOT");
  
   while (!client.connect(THINGNAME))
   {
@@ -138,17 +141,17 @@ void connectAWS()
   // Subscribe to a topic
   client.subscribe(AWS_IOT_SUBSCRIBE_TOPIC);
  
-  Serial.println("AWS IoT Connected!");
+  Serial.println("\nConectado a AWS IoT!");
 }
  
  
 void publishMessage()
 {
   StaticJsonDocument<200> doc;
-  doc["time"] = millis();
+  doc["time"] = now;
   doc["humidity"] = h;
   doc["temperature"] = t;
-  doc["luz"] = l;
+  doc["light"] = l;
   char jsonBuffer[512];
   serializeJson(doc, jsonBuffer); // print to client
  
@@ -161,43 +164,44 @@ void setup()
   Serial.begin(115200);
   connectAWS();
   dht.begin();
+  EasyBuzzer.setPin(BUZZPIN);
 }
  
  
 void loop()
 {
-  h = dht.readHumidity();
-  t = dht.readTemperature();
-  l = analogRead(LDRPIN);
-
-  if (isnan(h) || isnan(t) )  // Check if any reads failed and exit early (to try again).
+  if (millis() - lastMillis > interval)
   {
-    Serial.println(F("Failed to read from DHT sensor!"));
-    return;
-  }
- 
-  Serial.print(F("Humidity: "));
-  Serial.print(h);
-  Serial.print(F("%  Temperature: "));
-  Serial.print(t);
-  Serial.print(F("°C Intensidad: "));
-  Serial.print(l);
-  Serial.println(F(" lum "));
-  delay(2000);
- 
-  now = time(nullptr);
- 
-  if (!client.connected())
-  {
-    connectAWS();
-  }
-  else
-  {
-    client.loop();
-    if (millis() - lastMillis > 5000)
+    lastMillis = millis();
+    if (!client.connected())
     {
-      lastMillis = millis();
+      connectAWS();
+    }
+    else
+    {
+      client.loop();
+      
+      h = dht.readHumidity();
+      t = dht.readTemperature();
+      l = analogRead(LDRPIN);
+    
+      if (isnan(h) || isnan(t) )
+      {
+        Serial.println(F("Error al leer el sensor DHT!"));
+        return;
+      }
+     
+      Serial.print(F("Humedad: "));
+      Serial.print(h);
+      Serial.print(F("%  Temperatura: "));
+      Serial.print(t);
+      Serial.print(F("°C Intensidad: "));
+      Serial.print(l);
+      Serial.println(F(" %"));
+     
+      now = time(nullptr);
       publishMessage();
     }
   }
+  EasyBuzzer.update();
 }
